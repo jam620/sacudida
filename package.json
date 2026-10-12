@@ -1,6 +1,6 @@
 {
   "name": "sacudida",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Sacudida — monitoreo informativo de sismos en Panamá con datos públicos de USGS. No predice sismos ni reemplaza alertas oficiales. PWA instalable.",
   "scripts": {
