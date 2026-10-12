@@ -170,6 +170,10 @@ og:image → caché 5 min → UI**. Almacenamiento en UTC, presentación en
   original (`sismo-panama-mvp-docs`, conservada como respaldo); toda la
   suite (123/123) y el build se verificaron desde aquí.
 
+## Auto-despliegue
+
+El repo está conectado a Vercel: cada push a main despliega automáticamente.
+
 ## Nota sobre las carpetas
 
 La carpeta de trabajo canónica es **esta** (`sacudida-app`). La carpeta
