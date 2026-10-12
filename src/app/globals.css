@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-slate-950 text-slate-100 antialiased;
+}
+
+/* Enfoque visible y de alto contraste para navegación por teclado. */
+:focus-visible {
+  outline: 2px solid #f8fafc;
+  outline-offset: 2px;
+}
+
+/* Control de accesibilidad: tamaño de letra global (rem). */
+html[data-fontsize="large"] {
+  font-size: 17px;
+}
+
+html[data-fontsize="xlarge"] {
+  font-size: 19px;
+}
+
+/* Tema oscuro sin claves de API: tiles OSM estándar en escala de grises
+   e invertidos. Especificidad doble porque leaflet.css inyecta después
+   un "filter: inherit" en .leaflet-tile. Solo afecta a los tiles,
+   no a los marcadores. */
+.leaflet-container .leaflet-tile {
+  filter: grayscale(1) invert(1) brightness(0.9) contrast(0.85);
+}
+
+.leaflet-container {
+  background-color: #0f172a;
+  font-family: inherit;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background-color: #1e293b;
+  color: #f1f5f9;
+}
+
+.leaflet-popup-content {
+  margin: 10px 12px;
+}
+
+.leaflet-control-attribution {
+  background-color: rgba(15, 23, 42, 0.85) !important;
+  color: #94a3b8 !important;
+}
+
+.leaflet-control-attribution a {
+  color: #cbd5e1 !important;
+}
+
+.leaflet-bar a {
+  background-color: #1e293b !important;
+  color: #e2e8f0 !important;
+  border-bottom-color: #334155 !important;
+}

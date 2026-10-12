@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+next-env.d.ts
+
+# production
+build/
+
+# base de datos local (nunca subir)
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# variables de entorno
+.env
+.env.local
+.env.*.local
+
+# pruebas
+coverage/
+
+# misc
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+
+# vercel (vínculo local del CLI)
+.vercel
+
+# registros
+*.log

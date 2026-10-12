@@ -1,0 +1,9 @@
+# Normalizar saltos de línea: LF en el repo (los builds de Vercel corren
+# en Linux; el checkout en Windows usa CRLF donde git lo decida).
+* text=auto eol=lf
+
+# Binarios reales: nunca tocarlos
+*.png binary
+*.ico binary
+*.sqlite binary
+*.woff2 binary
