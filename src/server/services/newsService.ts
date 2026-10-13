@@ -18,11 +18,19 @@ import type { NewsItem } from "@/types/news";
 const NEWS_QUERIES = ["sismo Panamá", "temblor Panamá", "terremoto Panamá"];
 
 const FEED_TIMEOUT_MS = 8_000;
-const IMAGE_TIMEOUT_MS = 4_000;
-const IMAGE_BUDGET = 8;
+const IMAGE_TIMEOUT_MS = 4_500;
+const IMAGE_BUDGET = 12;
 const MAX_ITEMS = 12;
 const CACHE_TTL_MS = 5 * 60_000;
 const EMPTY_CACHE_TTL_MS = 60_000;
+
+/**
+ * User-Agent tipo navegador: muchos CDN responden 403 a clientes
+ * desconocidos cuando se pide la página para leer og:image.
+ */
+const ARTICLE_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 SacudidaReader/0.2";
 
 type NewsCache = { fetchedAt: number; expiresAt: number; items: NewsItem[] };
 
@@ -37,12 +45,16 @@ function googleNewsFeedUrl(query: string): string {
   );
 }
 
-async function fetchText(url: string, timeoutMs: number): Promise<string> {
+async function fetchText(
+  url: string,
+  timeoutMs: number,
+  userAgent?: string
+): Promise<string> {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(timeoutMs),
     headers: {
       accept: "application/rss+xml, application/xml, text/html;q=0.9, */*;q=0.8",
-      "user-agent": "Sacudida/0.2 (monitor sísmico informativo)",
+      "user-agent": userAgent ?? "Sacudida/0.2 (monitor sísmico informativo)",
     },
     redirect: "follow",
   });
@@ -61,20 +73,29 @@ async function fetchFeed(query: string): Promise<RssItem[]> {
   }
 }
 
-/** og:image de una página de artículo (siguiendo la redirección del feed). */
-async function extractOgImage(articleUrl: string): Promise<string | null> {
+/** Patrones de imagen de una página, en orden de preferencia. */
+const IMAGE_PATTERNS: RegExp[] = [
+  /<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,
+  /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url)?["']/i,
+  /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
+  /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i,
+  /<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i,
+  /<img[^>]+src=["'](https?:[^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/i,
+];
+
+/**
+ * Imagen de una página de artículo (siguiendo la redirección del feed):
+ * og:image → twitter:image → image_src → primera <img> de contenido.
+ */
+async function extractArticleImage(articleUrl: string): Promise<string | null> {
   try {
-    const html = await fetchText(articleUrl, IMAGE_TIMEOUT_MS);
-    const match =
-      html.match(
-        /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-      ) ??
-      html.match(
-        /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
-      );
-    const url = match?.[1];
-    if (url && /^https?:\/\//.test(url)) {
-      return url;
+    const html = await fetchText(articleUrl, IMAGE_TIMEOUT_MS, ARTICLE_USER_AGENT);
+    for (const pattern of IMAGE_PATTERNS) {
+      const match = html.match(pattern);
+      const url = match?.[1]?.replace(/&amp;/g, "&");
+      if (url && /^https?:\/\//.test(url)) {
+        return url;
+      }
     }
     return null;
   } catch {
@@ -144,10 +165,10 @@ export async function getNews(): Promise<{
 
     const items = unique.slice(0, MAX_ITEMS).map(toNewsItem);
 
-    // Enriquecer con imagen solo los primeros ítems (presupuesto acotado).
+    // Enriquecer con imagen (og:image / twitter:image / primera img).
     await Promise.allSettled(
       items.slice(0, IMAGE_BUDGET).map(async (newsItem) => {
-        newsItem.imageUrl = await extractOgImage(newsItem.url);
+        newsItem.imageUrl = await extractArticleImage(newsItem.url);
       })
     );
 

@@ -44,16 +44,22 @@ function tagContent(block: string, tagName: string): string {
   return match ? stripCdata(match[1] ?? "") : "";
 }
 
-/** Elimina etiquetas HTML y deja texto plano legible. */
+/**
+ * Elimina etiquetas HTML y deja texto plano legible.
+ *
+ * Importante: decodifica entidades ANTES de quitar etiquetas. Los feeds
+ * traen el HTML de la descripción codificado (&lt;a href=…&gt;); si se
+ * decodificara después, el enlace quedaría como texto visible.
+ */
 export function stripHtml(html: string): string {
-  return decodeEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-  )
-    .replace(/\s+/g, " ")
-    .trim();
+  let text = decodeEntities(html);
+  text = text
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  // Segunda pasada por si quedó HTML doblemente codificado.
+  text = decodeEntities(text);
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /** Resumen breve: corta en límite de palabra y añade elipsis. */

@@ -5,13 +5,17 @@
  * del RSS público de Google Noticias (enlaces al medio original), más
  * accesos directos a redes sociales (X / Instagram) con búsquedas en
  * vivo y cuentas oficiales verificadas.
+ *
+ * Responsive: en móvil cada noticia es una fila compacta con miniatura;
+ * desde sm pasan a tarjetas en grilla (2 columnas) y en lg a 3 columnas.
  */
 
+import { useState } from "react";
 import useSWR from "swr";
 import { apiFetcher } from "@/lib/api";
 import { NEWS_REFRESH_INTERVAL_MS } from "@/lib/constants";
 import { formatRelativeTime } from "@/lib/format";
-import type { NewsResponse } from "@/types/news";
+import type { NewsItem, NewsResponse } from "@/types/news";
 
 type NewsOk = Extract<NewsResponse, { ok: true }>;
 
@@ -45,6 +49,126 @@ function initialsOf(source: string): string {
     .slice(0, 2)
     .map((word) => word[0]?.toUpperCase() ?? "")
     .join("");
+}
+
+/** Imagen de la noticia con degradado de respaldo si falla la carga. */
+function NewsImage({ item, compact }: { item: NewsItem; compact: boolean }) {
+  const [failed, setFailed] = useState(false);
+
+  if (item.imageUrl !== null && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={item.imageUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className={`bg-slate-700 object-cover ${
+          compact ? "h-full w-full" : "aspect-video w-full"
+        }`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-900 ${
+        compact ? "h-full w-full" : "aspect-video w-full"
+      }`}
+    >
+      <span
+        className={`font-black tracking-widest text-slate-500 ${
+          compact ? "text-sm" : "text-3xl"
+        }`}
+      >
+        {initialsOf(item.source) || "📰"}
+      </span>
+    </div>
+  );
+}
+
+function NewsCard({ item }: { item: NewsItem }) {
+  return (
+    <article className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-800/40">
+      <a
+        href={item.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        tabIndex={-1}
+        aria-hidden="true"
+        className="block overflow-hidden"
+      >
+        <NewsImage item={item} compact={false} />
+      </a>
+
+      <div className="flex flex-1 flex-col p-3">
+        <h3 className="text-sm font-semibold leading-snug text-slate-100">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-sky-300"
+          >
+            {item.title}
+          </a>
+        </h3>
+        {item.summary.length > 0 ? (
+          <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-slate-400">
+            {item.summary}
+          </p>
+        ) : null}
+        <p className="mt-auto pt-2 text-[11px] text-slate-500">
+          <span className="font-medium text-slate-400">{item.source}</span>
+          {item.publishedAt !== null
+            ? ` · ${formatRelativeTime(item.publishedAt)}`
+            : ""}
+        </p>
+      </div>
+    </article>
+  );
+}
+
+function NewsRow({ item }: { item: NewsItem }) {
+  return (
+    <article className="flex gap-3 rounded-xl border border-slate-800 bg-slate-800/40 p-2.5">
+      <a
+        href={item.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        tabIndex={-1}
+        aria-hidden="true"
+        className="h-20 w-28 shrink-0 overflow-hidden rounded-lg"
+      >
+        <NewsImage item={item} compact />
+      </a>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-slate-100">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-sky-300"
+          >
+            {item.title}
+          </a>
+        </h3>
+        {item.summary.length > 0 ? (
+          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-400">
+            {item.summary}
+          </p>
+        ) : null}
+        <p className="mt-auto pt-1 text-[11px] text-slate-500">
+          <span className="font-medium text-slate-400">{item.source}</span>
+          {item.publishedAt !== null
+            ? ` · ${formatRelativeTime(item.publishedAt)}`
+            : ""}
+        </p>
+      </div>
+    </article>
+  );
 }
 
 export default function NewsPanel() {
@@ -81,11 +205,11 @@ export default function NewsPanel() {
       </p>
 
       {isLoading && items.length === 0 ? (
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+        <div className="mt-4 flex flex-col gap-3" aria-busy="true">
           {[0, 1, 2].map((index) => (
             <div
               key={index}
-              className="h-72 animate-pulse rounded-xl border border-slate-800 bg-slate-800/40"
+              className="h-24 animate-pulse rounded-xl border border-slate-800 bg-slate-800/40"
             />
           ))}
         </div>
@@ -96,74 +220,23 @@ export default function NewsPanel() {
           confiables.
         </p>
       ) : (
-        <ul className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" role="list">
-          {items.map((item) => (
-            <li key={item.id}>
-              <article className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-800/40">
-                {item.imageUrl ? (
-                  <a
-                    href={item.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    tabIndex={-1}
-                    aria-hidden="true"
-                    className="block aspect-video w-full overflow-hidden bg-slate-700"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={item.imageUrl}
-                      alt=""
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      className="h-full w-full object-cover"
-                    />
-                  </a>
-                ) : (
-                  <div className="flex aspect-video w-full items-center justify-center bg-gradient-to-br from-slate-700 to-slate-900">
-                    <span className="text-3xl font-black tracking-widest text-slate-500">
-                      {initialsOf(item.source) || "📰"}
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex flex-1 flex-col p-3">
-                  <h3 className="text-sm font-semibold leading-snug text-slate-100">
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:text-sky-300"
-                    >
-                      {item.title}
-                    </a>
-                  </h3>
-                  {item.summary.length > 0 ? (
-                    <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-slate-400">
-                      {item.summary}
-                    </p>
-                  ) : null}
-                  <p className="mt-auto pt-2 text-[11px] text-slate-500">
-                    {item.sourceUrl ? (
-                      <a
-                        href={item.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium text-slate-400 underline decoration-slate-600 underline-offset-2"
-                      >
-                        {item.source}
-                      </a>
-                    ) : (
-                      <span className="font-medium text-slate-400">{item.source}</span>
-                    )}
-                    {item.publishedAt !== null
-                      ? ` · ${formatRelativeTime(item.publishedAt)}`
-                      : ""}
-                  </p>
-                </div>
-              </article>
-            </li>
-          ))}
-        </ul>
+        // Móvil: filas compactas. ≥sm: grilla de tarjetas (2 y 3 columnas).
+        <>
+          <ul className="mt-4 flex flex-col gap-3 sm:hidden" role="list">
+            {items.map((item) => (
+              <li key={item.id}>
+                <NewsRow item={item} />
+              </li>
+            ))}
+          </ul>
+          <ul className="mt-4 hidden gap-4 sm:grid sm:grid-cols-2 lg:grid-cols-3" role="list">
+            {items.map((item) => (
+              <li key={item.id}>
+                <NewsCard item={item} />
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       <div className="mt-5 rounded-lg border border-slate-800 bg-slate-800/30 p-4">

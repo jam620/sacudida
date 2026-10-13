@@ -82,6 +82,18 @@ describe("stripHtml / buildSummary / decodeEntities", () => {
     expect(stripHtml("<a href='x'>ver</a> más")).toBe("ver más");
   });
 
+  it("elimina enlaces que llegan codificados como entidades (bug del href visible)", () => {
+    // Así viene la descripción en el RSS de Google Noticias.
+    const description =
+      "&lt;a href='https://news.google.com/rss/articles/xyz'&gt;Titular de prueba&lt;/a&gt;" +
+      "&nbsp;&nbsp;&lt;font color='#6f6f6f'&gt;TVN&lt;/font&gt;";
+    const clean = stripHtml(description);
+    expect(clean).toBe("Titular de prueba TVN");
+    expect(clean).not.toContain("href");
+    expect(clean).not.toContain("<");
+    expect(clean).not.toContain("&lt;");
+  });
+
   it("resume con límite y elipsis en palabra", () => {
     const long = "palabra ".repeat(40).trim();
     const summary = buildSummary(long, 60);
@@ -127,10 +139,16 @@ describe("getNews", () => {
         return new Response(xml, { status: 200 });
       }
 
-      // Páginas de artículo con og:image.
-      if (url.includes("medio.example")) {
+      // Páginas de artículo con og:image y variante twitter:image.
+      if (url.includes("medio.example/a/repl")) {
         return new Response(
           '<html><head><meta property="og:image" content="https://img.example/foto.jpg"></head></html>',
+          { status: 200 }
+        );
+      }
+      if (url.includes("medio.example")) {
+        return new Response(
+          '<html><head><meta name="twitter:image" content="https://img.example/tw.jpg"></head></html>',
           { status: 200 }
         );
       }
@@ -153,6 +171,8 @@ describe("getNews", () => {
     expect(items[0]?.title).toBe("Réplica fuerte en Tonosí");
     // Imagen enriquecida desde og:image.
     expect(items[0]?.imageUrl).toBe("https://img.example/foto.jpg");
+    // Fallback a twitter:image cuando no hay og:image.
+    expect(items[1]?.imageUrl).toBe("https://img.example/tw.jpg");
     // Resumen limpio de HTML.
     expect(items[0]?.summary).toContain("Resumen");
   });
