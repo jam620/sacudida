@@ -13,6 +13,11 @@ export type RssItem = {
   sourceName: string | null;
   sourceUrl: string | null;
   descriptionHtml: string;
+  /**
+   * Miniatura del artículo cuando el feed la incluye directamente
+   * (Bing News la trae en <News:Image>); null en los feeds sin imagen.
+   */
+  imageUrl?: string | null;
 };
 
 function stripCdata(value: string): string {
@@ -100,6 +105,80 @@ export function parseRssItems(xml: string): RssItem[] {
       sourceName: sourceMatch ? decodeEntities(sourceMatch[2] ?? "").trim() : null,
       sourceUrl: sourceMatch ? sourceMatch[1] ?? null : null,
       descriptionHtml: tagContent(body, "description"),
+      imageUrl: null,
+    });
+  }
+
+  return items;
+}
+
+/**
+ * Miniatura de un item de Bing News: la etiqueta <News:Image> apunta a un
+ * redirector propio que sirve la foto real del artículo. Se fuerza HTTPS y
+ * un ancho razonable; el dominio de Bing no siempre acepta http en apps.
+ */
+function normalizeBingImage(url: string): string | null {
+  if (!/^https?:\/\//i.test(url)) {
+    return null;
+  }
+  const https = url.replace(/^http:\/\//i, "https://");
+  if (/[?&]w=/.test(https)) {
+    return https;
+  }
+  return https.includes("?") ? `${https}&w=600` : `${https}?w=600`;
+}
+
+/**
+ * URL final del medio dentro de un enlace apiclick.aspx de Bing News
+ * (parámetro "url" codificado como query). Si no viene, se usa el enlace
+ * tal cual: también funciona, solo que pasa por Bing.
+ */
+function decodeBingLink(link: string): string {
+  const match = link.match(/[?&]url=([^&]+)/);
+  if (!match?.[1]) {
+    return link;
+  }
+  try {
+    const decoded = decodeURIComponent(match[1]);
+    return /^https?:\/\//i.test(decoded) ? decoded : link;
+  } catch {
+    return link;
+  }
+}
+
+/**
+ * Parser del RSS de Bing News (news/search?format=rss), que a diferencia
+ * del de Google Noticias incluye la miniatura del artículo (<News:Image>)
+ * y la URL del medio (parámetro "url" del enlace) en el propio XML.
+ */
+export function parseBingNewsItems(xml: string): RssItem[] {
+  const blocks = xml.split("<item>").slice(1);
+  const items: RssItem[] = [];
+
+  for (const block of blocks) {
+    const body = block.split("</item>")[0] ?? "";
+    const title = decodeEntities(tagContent(body, "title"));
+    const rawLink = decodeEntities(tagContent(body, "link"));
+    if (title.length === 0 || rawLink.length === 0) {
+      continue;
+    }
+    const link = decodeBingLink(rawLink);
+
+    // Cierre exacto </News:Image> para no capturar <News:ImageSize>.
+    const imageRaw = body.match(/<news:image>([\s\S]*?)<\/news:image>/i);
+    const pubDateRaw = tagContent(body, "pubDate");
+    const pubDateMs = pubDateRaw ? Date.parse(pubDateRaw) : Number.NaN;
+    const tid = rawLink.match(/[?&]tid=([^&]+)/)?.[1];
+
+    items.push({
+      title,
+      link,
+      guid: tid ? `bing-${tid}` : link,
+      pubDateMs: Number.isFinite(pubDateMs) ? pubDateMs : null,
+      sourceName: decodeEntities(tagContent(body, "News:Source")).trim() || null,
+      sourceUrl: null,
+      descriptionHtml: tagContent(body, "description"),
+      imageUrl: imageRaw ? normalizeBingImage(decodeEntities(imageRaw[1] ?? "")) : null,
     });
   }
 

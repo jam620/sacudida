@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildSummary,
   decodeEntities,
+  parseBingNewsItems,
   parseRssItems,
   stripHtml,
 } from "@/lib/rss";
@@ -75,6 +76,52 @@ describe("parseRssItems", () => {
   });
 });
 
+describe("parseBingNewsItems", () => {
+  function bingItemXml(overrides: { image?: string | null; link?: string } = {}): string {
+    const link =
+      overrides.link ??
+      "http://www.bing.com/news/apiclick.aspx?ref=FexRss&amp;tid=6ace86fe&amp;" +
+        "url=https%3a%2f%2fwww.telemetro.com%2Fnacionales%2Fsismo-panama-n6095085&amp;c=108";
+    const image =
+      overrides.image === undefined
+        ? "http://www.bing.com/th?id=ONUT.53ej&amp;pid=News"
+        : overrides.image;
+    const imageTag = image === null ? "" : `<News:Image>${image}</News:Image>`;
+    return (
+      "<item>" +
+      "<title>Sismo en Panamá | Realizan inspección los edificios</title>" +
+      `<link>${link}</link>` +
+      "<description>Especialistas evaluaron las estructuras tras el sismo.</description>" +
+      "<pubDate>Tue, 13 Oct 2026 12:21:00 GMT</pubDate>" +
+      "<News:Source>Telemetro</News:Source>" +
+      `${imageTag}` +
+      "<News:ImageSize>w={0}&amp;h={1}&amp;c=14</News:ImageSize>" +
+      "</item>"
+    );
+  }
+
+  it("extrae imagen del feed, enlace al medio y fuente", () => {
+    const items = parseBingNewsItems(feedXml(bingItemXml()));
+
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    // Enlace decodificado desde el parámetro url del apiclick.
+    expect(item?.link).toBe("https://www.telemetro.com/nacionales/sismo-panama-n6095085");
+    expect(item?.sourceName).toBe("Telemetro");
+    // Miniatura forzada a HTTPS con ancho explícito.
+    expect(item?.imageUrl).toBe("https://www.bing.com/th?id=ONUT.53ej&pid=News&w=600");
+    // guid estable a partir del tid del enlace original.
+    expect(item?.guid).toBe("bing-6ace86fe");
+    // El titular no se corta: Bing no añade el sufijo " - Medio".
+    expect(item?.title).toBe("Sismo en Panamá | Realizan inspección los edificios");
+  });
+
+  it("deja imageUrl null si el item no trae <News:Image>", () => {
+    const items = parseBingNewsItems(feedXml(bingItemXml({ image: null })));
+    expect(items[0]?.imageUrl).toBeNull();
+  });
+});
+
 describe("stripHtml / buildSummary / decodeEntities", () => {
   it("limpia etiquetas y entidades", () => {
     expect(decodeEntities("a &amp; b &lt;c&gt;")).toBe("a & b <c>");
@@ -119,6 +166,11 @@ describe("getNews", () => {
       const url = String(input);
       callCount.value += 1;
 
+      // Bing caído: el servicio debe caer al respaldo de Google.
+      if (url.includes("bing.com")) {
+        return new Response("", { status: 503 });
+      }
+
       if (url.includes("news.google.com")) {
         const xml = feedXml(
           itemXml({
@@ -156,6 +208,77 @@ describe("getNews", () => {
       throw new Error(`URL inesperada: ${url}`);
     }) as unknown as typeof fetch;
   }
+
+  it("usa Bing como fuente primaria: imagen del feed y enlace al medio", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("bing.com")) {
+        const xml = feedXml(
+          "<item>" +
+            "<title>Sismo en Panamá | Realizan inspección los edificios</title>" +
+            "<link>http://www.bing.com/news/apiclick.aspx?tid=6ace86fe&amp;" +
+            "url=https%3a%2f%2fwww.telemetro.com%2Fnacionales%2Fsismo-panama-n6095085&amp;c=108</link>" +
+            "<description>Especialistas evaluaron las estructuras.</description>" +
+            "<pubDate>Tue, 13 Oct 2026 12:21:00 GMT</pubDate>" +
+            "<News:Source>Telemetro</News:Source>" +
+            "<News:Image>http://www.bing.com/th?id=ONUT.53ej&amp;pid=News</News:Image>" +
+            "</item>"
+        );
+        return new Response(xml, { status: 200 });
+      }
+      // Ni Google ni páginas de artículo deben consultarse en este camino.
+      throw new Error(`URL inesperada: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const { items } = await getNews();
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.source).toBe("Telemetro");
+    expect(items[0]?.url).toBe("https://www.telemetro.com/nacionales/sismo-panama-n6095085");
+    expect(items[0]?.imageUrl).toBe("https://www.bing.com/th?id=ONUT.53ej&pid=News&w=600");
+    // Solo los dos feeds de Bing; sin respaldo de Google ni artículos.
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.includes("bing.com"))).toBe(true);
+  });
+
+  it("descarta el og:image genérico del intersticial de Google Noticias", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("bing.com")) {
+        return new Response("", { status: 503 });
+      }
+      // El artículo ES un redirect de Google: devuelve el intersticial
+      // con el og:image genérico que debe descartarse.
+      if (url.includes("news.google.com/rss/articles")) {
+        return new Response(
+          '<html><head><meta property="og:image" content="https://lh3.googleusercontent.com/J6_coFbogx-generic"></head></html>',
+          { status: 200 }
+        );
+      }
+      if (url.includes("news.google.com")) {
+        return new Response(
+          feedXml(
+            itemXml({
+              title: "Balance oficial del SINAPROC - TVN",
+              guid: "g9",
+              link: "https://news.google.com/rss/articles/CBMi-ejemplo",
+              pubDate: "Mon, 12 Oct 2026 16:00:00 GMT",
+              source: "TVN",
+            })
+          ),
+          { status: 200 }
+        );
+      }
+      throw new Error(`URL inesperada: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const { items } = await getNews();
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.imageUrl).toBeNull();
+  });
 
   it("agrega, deduplica, ordena y extrae imágenes", async () => {
     const calls = { value: 0 };
@@ -213,6 +336,9 @@ describe("GET /api/news", () => {
   it("devuelve el envelope con items", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("bing.com")) {
+        return new Response("", { status: 503 });
+      }
       if (url.includes("news.google.com")) {
         return new Response(
           feedXml(

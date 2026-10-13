@@ -1,21 +1,24 @@
 /**
- * Servicio de noticias: agrega el RSS público de Google Noticias
- * (búsquedas "sismo/temblor/terremoto Panamá") y enriquece cada titular
- * con la imagen og:image del artículo original.
+ * Servicio de noticias: agrega el RSS público de Bing Noticias
+ * (búsquedas "sismo/terremoto Panamá"), que incluye la miniatura del
+ * artículo y el enlace al medio original en el propio XML. Si Bing falla
+ * o no devuelve nada, se usa el RSS de Google Noticias como respaldo.
  *
  * - Sin claves de API; los enlaces llevan al medio original.
  * - Caché en memoria con TTL (5 min con datos, 1 min si algo falló).
- * - Fail-safe: un feed o artículo que falle se omite sin romper nada.
+ * - Fail-safe: un feed que falla se omite sin romper nada.
  */
 
 import {
   buildSummary,
+  parseBingNewsItems,
   parseRssItems,
 } from "@/lib/rss";
 import type { RssItem } from "@/lib/rss";
 import type { NewsItem } from "@/types/news";
 
-const NEWS_QUERIES = ["sismo Panamá", "temblor Panamá", "terremoto Panamá"];
+const BING_QUERIES = ["sismo Panamá", "terremoto Panamá"];
+const GOOGLE_QUERIES = ["sismo Panamá", "temblor Panamá", "terremoto Panamá"];
 
 const FEED_TIMEOUT_MS = 8_000;
 const IMAGE_TIMEOUT_MS = 4_500;
@@ -37,6 +40,14 @@ type NewsCache = { fetchedAt: number; expiresAt: number; items: NewsItem[] };
 let cache: NewsCache | null = null;
 let inFlight: Promise<NewsItem[]> | null = null;
 
+function bingNewsFeedUrl(query: string): string {
+  return (
+    "https://www.bing.com/news/search?q=" +
+    encodeURIComponent(query) +
+    "&format=rss&setmkt=es-PA&setlang=es"
+  );
+}
+
 function googleNewsFeedUrl(query: string): string {
   return (
     "https://news.google.com/rss/search?q=" +
@@ -49,7 +60,7 @@ async function fetchText(
   url: string,
   timeoutMs: number,
   userAgent?: string
-): Promise<string> {
+): Promise<{ text: string; finalUrl: string }> {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(timeoutMs),
     headers: {
@@ -61,13 +72,22 @@ async function fetchText(
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
-  return response.text();
+  return { text: await response.text(), finalUrl: response.url || url };
 }
 
-async function fetchFeed(query: string): Promise<RssItem[]> {
+async function fetchBingFeed(query: string): Promise<RssItem[]> {
   try {
-    const xml = await fetchText(googleNewsFeedUrl(query), FEED_TIMEOUT_MS);
-    return parseRssItems(xml);
+    const { text } = await fetchText(bingNewsFeedUrl(query), FEED_TIMEOUT_MS);
+    return parseBingNewsItems(text);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchGoogleFeed(query: string): Promise<RssItem[]> {
+  try {
+    const { text } = await fetchText(googleNewsFeedUrl(query), FEED_TIMEOUT_MS);
+    return parseRssItems(text);
   } catch {
     return [];
   }
@@ -84,14 +104,25 @@ const IMAGE_PATTERNS: RegExp[] = [
 ];
 
 /**
- * Imagen de una página de artículo (siguiendo la redirección del feed):
+ * Imagen de un artículo original (no un redirect de Google Noticias):
  * og:image → twitter:image → image_src → primera <img> de contenido.
+ *
+ * Los enlaces de Google Noticias devuelven un intersticial propio cuyo
+ * og:image es el logo genérico de Google; en ese caso se descarta y el
+ * frente muestra su marcador de posición.
  */
 async function extractArticleImage(articleUrl: string): Promise<string | null> {
   try {
-    const html = await fetchText(articleUrl, IMAGE_TIMEOUT_MS, ARTICLE_USER_AGENT);
+    const { text, finalUrl } = await fetchText(
+      articleUrl,
+      IMAGE_TIMEOUT_MS,
+      ARTICLE_USER_AGENT
+    );
+    if (/^https?:\/\/news\.google\.com\//i.test(finalUrl)) {
+      return null;
+    }
     for (const pattern of IMAGE_PATTERNS) {
-      const match = html.match(pattern);
+      const match = text.match(pattern);
       const url = match?.[1]?.replace(/&amp;/g, "&");
       if (url && /^https?:\/\//.test(url)) {
         return url;
@@ -131,11 +162,24 @@ function toNewsItem(item: RssItem): NewsItem {
     title: headline,
     url: item.link,
     summary: buildSummary(item.descriptionHtml),
-    imageUrl: null,
+    imageUrl: item.imageUrl ?? null,
     source: item.sourceName ?? suffix ?? "Google Noticias",
     sourceUrl: item.sourceUrl,
     publishedAt: item.pubDateMs,
   };
+}
+
+function dedupeAndSort(items: RssItem[]): RssItem[] {
+  const seen = new Set<string>();
+  const unique: RssItem[] = [];
+  for (const item of items) {
+    const key = normalizeTitle(item.title);
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(item);
+    }
+  }
+  return unique.sort((a, b) => (b.pubDateMs ?? 0) - (a.pubDateMs ?? 0));
 }
 
 /** Noticias agregadas, deduplicadas y ordenadas por fecha. */
@@ -148,28 +192,24 @@ export async function getNews(): Promise<{
   }
 
   inFlight ??= (async (): Promise<NewsItem[]> => {
-    const feeds = await Promise.all(NEWS_QUERIES.map(fetchFeed));
-    const all = feeds.flat();
+    const bingFeeds = await Promise.all(BING_QUERIES.map(fetchBingFeed));
+    let unique = dedupeAndSort(bingFeeds.flat());
 
-    const seen = new Set<string>();
-    const unique: RssItem[] = [];
-    for (const item of all) {
-      const key = normalizeTitle(item.title);
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(item);
-      }
+    if (unique.length === 0) {
+      const googleFeeds = await Promise.all(GOOGLE_QUERIES.map(fetchGoogleFeed));
+      unique = dedupeAndSort(googleFeeds.flat());
     }
-
-    unique.sort((a, b) => (b.pubDateMs ?? 0) - (a.pubDateMs ?? 0));
 
     const items = unique.slice(0, MAX_ITEMS).map(toNewsItem);
 
-    // Enriquecer con imagen (og:image / twitter:image / primera img).
+    // Respaldo Google: intentar la imagen del artículo original.
     await Promise.allSettled(
-      items.slice(0, IMAGE_BUDGET).map(async (newsItem) => {
-        newsItem.imageUrl = await extractArticleImage(newsItem.url);
-      })
+      items
+        .filter((newsItem) => newsItem.imageUrl === null)
+        .slice(0, IMAGE_BUDGET)
+        .map(async (newsItem) => {
+          newsItem.imageUrl = await extractArticleImage(newsItem.url);
+        })
     );
 
     const ttl = items.length > 0 ? CACHE_TTL_MS : EMPTY_CACHE_TTL_MS;
