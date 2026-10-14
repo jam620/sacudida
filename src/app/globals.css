@@ -31,6 +31,15 @@ html[data-fontsize="xlarge"] {
   filter: grayscale(1) invert(1) brightness(0.9) contrast(0.85);
 }
 
+/* El proxy de zoom de Leaflet queda con un transform translate3d/scale
+   gigante tras animaciones (pellizco en móvil) y genera miles de píxeles
+   de scroll fantasma bajo la página. Es un helper interno de render,
+   no funcional: ocultarlo no afecta al mapa. Especificidad doble porque
+   leaflet.css se inyecta después de esta hoja. */
+.leaflet-container .leaflet-proxy {
+  display: none;
+}
+
 .leaflet-container {
   background-color: #0f172a;
   font-family: inherit;
