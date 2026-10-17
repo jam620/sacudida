@@ -110,7 +110,7 @@ export default function EarthquakeList({
   }
 
   return (
-    <div className="flex h-full max-h-[560px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+    <div className="flex h-full max-h-[560px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60 [contain:layout]">
       <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
         <h2 className="text-base font-semibold text-slate-100">
           Eventos ({count})
