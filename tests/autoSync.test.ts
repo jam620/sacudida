@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   autoSyncEnabled,
+  getAftershockSummary,
   getEarthquakesWithAutoSync,
   parseFilters,
   resetAutoSyncStateForTests,
@@ -121,17 +122,18 @@ describe("getEarthquakesWithAutoSync", () => {
   });
 
   it("sincroniza con el piso y límite de importación definidos", async () => {
-    let requestedUrl = "";
+    const requestedUrls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      requestedUrl = String(input);
+      requestedUrls.push(String(input));
       return jsonResponse(makeUsgsPayload([]));
     });
     enableAutoSync();
 
     await getEarthquakesWithAutoSync(parseFilters({}));
 
-    expect(requestedUrl).toContain("minmagnitude=2");
-    expect(requestedUrl).toContain("limit=500");
+    // La primera consulta es la ventana corta habitual.
+    expect(requestedUrls[0]).toContain("minmagnitude=2");
+    expect(requestedUrls[0]).toContain("limit=500");
   });
 
   it("con la sincronización desactivada devuelve la lista vacía sin fetch", async () => {
@@ -210,5 +212,87 @@ describe("getEarthquakesWithAutoSync", () => {
 
     expect(result).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("rescate de secuencia (principal fuera de la ventana corta)", () => {
+  const DAY_MS = 86_400_000;
+
+  it("importa la secuencia completa cuando falta el principal", async () => {
+    const now = Date.now();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const minMagnitude = Number(url.searchParams.get("minmagnitude"));
+
+      // Sonda barata: existe un principal M7.7 de hace 8 días.
+      if (minMagnitude >= 6) {
+        return jsonResponse(
+          makeUsgsPayload([
+            makeUsgsFeature({
+              id: "main-m77",
+              mag: 7.7,
+              time: now - 8 * DAY_MS,
+              updated: now - 8 * DAY_MS,
+            }),
+          ])
+        );
+      }
+      // Backfill completo (las más fuertes primero): principal + réplica.
+      if (url.searchParams.get("orderby") === "magnitude") {
+        return jsonResponse(
+          makeUsgsPayload([
+            makeUsgsFeature({
+              id: "main-m77",
+              mag: 7.7,
+              time: now - 8 * DAY_MS,
+              updated: now - 8 * DAY_MS,
+            }),
+            makeUsgsFeature({
+              id: "replica-historica",
+              mag: 5.0,
+              time: now - 7.5 * DAY_MS,
+              updated: now - 7.5 * DAY_MS,
+            }),
+          ])
+        );
+      }
+      // Ventana corta habitual: réplicas recientes sin el principal.
+      return jsonResponse(
+        makeUsgsPayload([makeUsgsFeature({ id: "replica-nueva", mag: 3.4 })])
+      );
+    });
+    enableAutoSync();
+
+    const result = await getEarthquakesWithAutoSync(parseFilters({}));
+
+    // La respuesta inmediata sirve la ventana corta...
+    expect(result.map((earthquake) => earthquake.id)).toContain("replica-nueva");
+
+    // ...y el rescate dejó al principal y su histórico en la base.
+    const summary = getAftershockSummary();
+    expect(summary?.mainshock.id).toBe("main-m77");
+    expect(summary?.aftershocks.total).toBeGreaterThanOrEqual(2);
+  });
+
+  it("sin secuencia activa solo sondea (no importa el histórico)", async () => {
+    const queries: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      queries.push(
+        `${url.searchParams.get("minmagnitude")}/${url.searchParams.get("orderby")}`
+      );
+      if (Number(url.searchParams.get("minmagnitude")) >= 6) {
+        return jsonResponse(makeUsgsPayload([]));
+      }
+      return jsonResponse(
+        makeUsgsPayload([makeUsgsFeature({ id: "rutinaria", mag: 3.0 })])
+      );
+    });
+    enableAutoSync();
+
+    await getEarthquakesWithAutoSync(parseFilters({}));
+
+    // Ventana corta + sonda en vacío: sin backfill completo.
+    expect(queries).toEqual(["2/time", "6.5/magnitude"]);
   });
 });

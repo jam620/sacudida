@@ -23,7 +23,7 @@ import { ValidationError } from "@/lib/errors";
 import { distanceKm } from "@/lib/geo";
 import type { LatLng } from "@/lib/geo";
 import type { Earthquake, EarthquakeFilters } from "@/types/earthquake";
-import { LAST_SYNC_SETTING_KEY, importUsgsEarthquakes } from "../etl/usgsImporter";
+import { LAST_SYNC_SETTING_KEY, importUsgsEarthquakes, fetchUsgsEarthquakes } from "../etl/usgsImporter";
 import {
   countAftershocksSince,
   countEarthquakes,
@@ -168,8 +168,43 @@ export function autoSyncEnabled(): boolean {
 const AUTO_SYNC_STALE_AFTER_MS = SYNC_STALE_AFTER_MS; // modo en vivo
 const AUTO_SYNC_RETRY_BACKOFF_MS = 15_000;
 
+/**
+ * Rescate de secuencia: la ventana corta de sincronización (DEFAULT_DAYS)
+ * deja fuera al terremoto principal cuando la emergencia cumple días, y
+ * sin él desaparecen el contador y la gráfica de réplicas. Si tras la
+ * sincronización normal no hay M >= 6.5 en la base, se importa la
+ * secuencia completa (M >= 2.5, las más fuertes primero, 35 días).
+ */
+const SEQUENCE_BACKFILL_DAYS = 35;
+const SEQUENCE_ABSENT_RETRY_MS = 60 * 60_000;
+
 let ensureInFlight: Promise<void> | null = null;
 let lastFailedAttemptMs = 0;
+let sequenceAbsentUntilMs = 0;
+
+async function backfillMainshockSequence(): Promise<void> {
+  if (Date.now() < sequenceAbsentUntilMs) {
+    return;
+  }
+  // Consulta barata primero: ¿existe un terremoto principal reciente?
+  const probe = await fetchUsgsEarthquakes({
+    days: SEQUENCE_BACKFILL_DAYS,
+    minMagnitude: MAINSHOCK_THRESHOLD,
+    orderBy: "magnitude",
+    limit: 3,
+  });
+  if (probe.features.length === 0) {
+    // Sin secuencia activa: no repetir la sonda durante una hora.
+    sequenceAbsentUntilMs = Date.now() + SEQUENCE_ABSENT_RETRY_MS;
+    return;
+  }
+  await importUsgsEarthquakes({
+    days: SEQUENCE_BACKFILL_DAYS,
+    minMagnitude: DEFAULT_MIN_MAGNITUDE,
+    orderBy: "magnitude",
+    limit: SYNC_EVENTS_LIMIT,
+  });
+}
 
 function isCacheFresh(): boolean {
   const lastSyncAt = getSettingValue(LAST_SYNC_SETTING_KEY);
@@ -213,6 +248,17 @@ export async function ensureFreshData(): Promise<void> {
     limit: SYNC_EVENTS_LIMIT,
   })
     .then(() => {
+      if (
+        findStrongestEarthquake({
+          days: 30,
+          minMagnitude: MAINSHOCK_THRESHOLD,
+        }) === null
+      ) {
+        return backfillMainshockSequence();
+      }
+      return undefined;
+    })
+    .then(() => {
       lastFailedAttemptMs = 0;
     })
     .catch(() => {
@@ -230,6 +276,7 @@ export async function ensureFreshData(): Promise<void> {
 export function resetAutoSyncStateForTests(): void {
   ensureInFlight = null;
   lastFailedAttemptMs = 0;
+  sequenceAbsentUntilMs = 0;
 }
 
 /**
