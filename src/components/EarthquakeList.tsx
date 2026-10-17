@@ -110,8 +110,8 @@ export default function EarthquakeList({
   }
 
   return (
-    <div className="flex h-full max-h-[560px] flex-col rounded-xl border border-slate-800 bg-slate-900/60">
-      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+    <div className="flex h-full max-h-[560px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
         <h2 className="text-base font-semibold text-slate-100">
           Eventos ({count})
         </h2>
@@ -120,10 +120,13 @@ export default function EarthquakeList({
         ) : null}
       </div>
 
+      {/* min-h-0 + flex-1: sin esto el <ul> no se encoge al alto del
+          contenedor (regla flex-col) y desborda miles de píxeles por
+          debajo de la página con listas largas. */}
       <ul
         role="list"
         aria-label="Lista de sismos"
-        className="flex flex-col gap-2 overflow-y-auto p-3"
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3"
       >
         {earthquakes?.map((earthquake) => (
           <li key={earthquake.id}>
