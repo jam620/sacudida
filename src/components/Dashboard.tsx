@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import AftershockChart from "./AftershockChart";
 import AftershockCounter from "./AftershockCounter";
 import AlertBanner from "./AlertBanner";
 import EarthquakeList from "./EarthquakeList";
@@ -300,6 +301,14 @@ export default function Dashboard() {
     setSelectedId((current) => (current === id ? null : id));
   }, []);
 
+  /** Punto de la gráfica pulsado: seleccionar y acercar el mapa. */
+  const handleChartSelect = useCallback((id: string) => {
+    setSelectedId(id);
+    document
+      .getElementById("mapa")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   const bannerEvent = earthquakes
     ? mostRecentAbove(earthquakes, RELEVANT_MAGNITUDE)
     : null;
@@ -310,6 +319,12 @@ export default function Dashboard() {
       {bannerEvent ? <AlertBanner earthquake={bannerEvent} /> : null}
 
       <AftershockCounter />
+
+      <AftershockChart
+        earthquakes={earthquakes ?? []}
+        selectedId={selectedId}
+        onSelect={handleChartSelect}
+      />
 
       <div className="grid gap-4 md:grid-cols-2">
         <LatestEarthquakeCard earthquake={latest} />
@@ -440,7 +455,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+      <div id="mapa" className="grid gap-4 lg:grid-cols-[3fr_2fr]">
         <MapView
           earthquakes={earthquakes ?? []}
           selectedId={selectedId}
