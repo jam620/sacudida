@@ -23,7 +23,14 @@ import { ValidationError } from "@/lib/errors";
 import { distanceKm } from "@/lib/geo";
 import type { LatLng } from "@/lib/geo";
 import type { Earthquake, EarthquakeFilters } from "@/types/earthquake";
-import { LAST_SYNC_SETTING_KEY, importUsgsEarthquakes, fetchUsgsEarthquakes } from "../etl/usgsImporter";
+import {
+  LAST_SYNC_SETTING_KEY,
+  importUsgsEarthquakes,
+  fetchUsgsEarthquakes,
+} from "../etl/usgsImporter";
+import type { ImportResult } from "../etl/usgsImporter";
+import { dispatchPushForEarthquakes, dispatchPushQuietly } from "./pushService";
+import { importIgcEarthquakes } from "../etl/igcImporter";
 import {
   countAftershocksSince,
   countEarthquakes,
@@ -178,13 +185,21 @@ const AUTO_SYNC_RETRY_BACKOFF_MS = 15_000;
 const SEQUENCE_BACKFILL_DAYS = 35;
 const SEQUENCE_ABSENT_RETRY_MS = 60 * 60_000;
 
-let ensureInFlight: Promise<void> | null = null;
+let ensureInFlight: Promise<{ newEvents: Earthquake[]; receivedAtIso: string | null }> | null =
+  null;
 let lastFailedAttemptMs = 0;
 let sequenceAbsentUntilMs = 0;
 
-async function backfillMainshockSequence(): Promise<void> {
+/** Eventos completos de una tanda de importación (para los avisos push). */
+function collectNewEvents(result: ImportResult): Earthquake[] {
+  return result.insertedIds
+    .map((id) => findEarthquakeById(id))
+    .filter((earthquake): earthquake is Earthquake => earthquake !== null);
+}
+
+async function backfillMainshockSequence(): Promise<ImportResult | null> {
   if (Date.now() < sequenceAbsentUntilMs) {
-    return;
+    return null;
   }
   // Consulta barata primero: ¿existe un terremoto principal reciente?
   const probe = await fetchUsgsEarthquakes({
@@ -196,9 +211,9 @@ async function backfillMainshockSequence(): Promise<void> {
   if (probe.features.length === 0) {
     // Sin secuencia activa: no repetir la sonda durante una hora.
     sequenceAbsentUntilMs = Date.now() + SEQUENCE_ABSENT_RETRY_MS;
-    return;
+    return null;
   }
-  await importUsgsEarthquakes({
+  return importUsgsEarthquakes({
     days: SEQUENCE_BACKFILL_DAYS,
     minMagnitude: DEFAULT_MIN_MAGNITUDE,
     orderBy: "magnitude",
@@ -242,34 +257,92 @@ export async function ensureFreshData(): Promise<void> {
     return;
   }
 
-  ensureInFlight ??= importUsgsEarthquakes({
-    days: DEFAULT_DAYS,
-    minMagnitude: SYNC_MIN_MAGNITUDE,
-    limit: SYNC_EVENTS_LIMIT,
-  })
-    .then(() => {
-      if (
-        findStrongestEarthquake({
-          days: 30,
-          minMagnitude: MAINSHOCK_THRESHOLD,
-        }) === null
-      ) {
-        return backfillMainshockSequence();
+  ensureInFlight ??= (async () => {
+    const main = await importUsgsEarthquakes({
+      days: DEFAULT_DAYS,
+      minMagnitude: SYNC_MIN_MAGNITUDE,
+      limit: SYNC_EVENTS_LIMIT,
+    });
+    const newEvents = collectNewEvents(main);
+    if (
+      findStrongestEarthquake({
+        days: 30,
+        minMagnitude: MAINSHOCK_THRESHOLD,
+      }) === null
+    ) {
+      const backfill = await backfillMainshockSequence();
+      if (backfill !== null) {
+        newEvents.push(...collectNewEvents(backfill));
       }
-      return undefined;
-    })
-    .then(() => {
+    }
+    return { newEvents, receivedAtIso: main.receivedAtIso };
+  })()
+    .then((outcome) => {
       lastFailedAttemptMs = 0;
+      return outcome;
     })
     .catch(() => {
       lastFailedAttemptMs = Date.now();
+      return { newEvents: [] as Earthquake[], receivedAtIso: null };
     })
-    .then(() => undefined)
     .finally(() => {
       ensureInFlight = null;
     });
 
-  await ensureInFlight;
+  const outcome = await ensureInFlight;
+
+  // Avisos push de los eventos recién insertados (fail-safe total).
+  if (outcome.newEvents.length > 0) {
+    await dispatchPushQuietly(outcome.newEvents, outcome.receivedAtIso);
+  }
+}
+
+/**
+ * Sincronización explícita + envío de push, para el endpoint de despacho
+ * (cron de Vercel o scheduler externo). No depende del modo automático.
+ */
+export async function syncAndDispatchPush(): Promise<{
+  inserted: number;
+  igcStatus: "ok" | "not-configured" | "error";
+  igcImported: number;
+  igcDuplicates: number;
+  sent: number;
+  expired: number;
+  errors: number;
+  skipped: boolean;
+  reason?: string;
+}> {
+  const main = await importUsgsEarthquakes({
+    days: DEFAULT_DAYS,
+    minMagnitude: SYNC_MIN_MAGNITUDE,
+    limit: SYNC_EVENTS_LIMIT,
+  });
+  const newEvents = collectNewEvents(main);
+  if (
+    findStrongestEarthquake({
+      days: 30,
+      minMagnitude: MAINSHOCK_THRESHOLD,
+    }) === null
+  ) {
+    const backfill = await backfillMainshockSequence();
+    if (backfill !== null) {
+      newEvents.push(...collectNewEvents(backfill));
+    }
+  }
+  const dispatch = await dispatchPushForEarthquakes(newEvents, {
+    receivedAtIso: main.receivedAtIso,
+  });
+
+  // Fuente local (IGC-UP) si el feed está configurado; nunca lanza.
+  const igc = await importIgcEarthquakes();
+
+  return {
+    inserted: newEvents.length,
+    igcStatus: igc.status,
+    igcImported: igc.imported,
+    igcDuplicates: igc.duplicates,
+    ...dispatch,
+  };
 }
 
 /** Reinicia el estado interno del auto-sync (solo para pruebas). */

@@ -90,7 +90,19 @@ export default function EarthquakeCard({
 
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
         <span>Profundidad: {formatDepth(earthquake.depthKm)}</span>
-        <span>Fuente: {earthquake.source}</span>
+        {earthquake.source === "igcup" ? (
+          <a
+            href="https://x.com/igcpanamaup"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="font-medium text-cyan-300 underline decoration-cyan-700 underline-offset-2"
+          >
+            Fuente: IGC-UP (red local)
+          </a>
+        ) : (
+          <span>Fuente: {earthquake.source === "usgs" ? "USGS" : earthquake.source}</span>
+        )}
         <span className="capitalize">
           Estado: {earthquake.status === "reviewed" ? "revisado" : earthquake.status}
         </span>

@@ -37,6 +37,7 @@ import {
   upsertEarthquakeRow,
 } from "../repositories/earthquakeRepository";
 import { setSettingValue } from "../repositories/settingsRepository";
+import { logSyncAttempt } from "../repositories/observabilityRepository";
 
 export type ImportResult = {
   inserted: number;
@@ -44,6 +45,10 @@ export type ImportResult = {
   skipped: number;
   /** Eventos antiguos eliminados de la caché local (> 30 días). */
   pruned: number;
+  /** IDs insertados en esta tanda (para avisos push de eventos nuevos). */
+  insertedIds: string[];
+  /** Momento UTC en que se recibió la respuesta del proveedor. */
+  receivedAtIso: string | null;
 };
 
 export type ImportOptions = {
@@ -150,17 +155,39 @@ export async function importUsgsEarthquakes(
   const orderBy = options.orderBy ?? "time";
   const limit = options.limit ?? SYNC_EVENTS_LIMIT;
 
-  const { features, invalidCount } = await fetchUsgsEarthquakes({
-    days,
-    minMagnitude,
-    orderBy,
-    limit,
-  });
+  const startedAtIso = toIsoUtc(Date.now());
+  let features: ReturnType<typeof parseUsgsResponse>["features"];
+  let invalidCount = 0;
+  try {
+    const fetched = await fetchUsgsEarthquakes({ days, minMagnitude, orderBy, limit });
+    features = fetched.features;
+    invalidCount = fetched.invalidCount;
+  } catch (error) {
+    try {
+      logSyncAttempt({
+        source: "usgs",
+        status: "error",
+        error: error instanceof Error ? error.message.slice(0, 200) : "error",
+        startedAt: startedAtIso,
+      });
+    } catch {
+      // La observabilidad no debe enmascarar el fallo original.
+    }
+    throw error;
+  }
+  const receivedAtIso = toIsoUtc(Date.now());
 
   const db: SqliteDatabase = getDatabase();
   initializeDatabase(db);
 
-  const result: ImportResult = { inserted: 0, updated: 0, skipped: 0, pruned: 0 };
+  const result: ImportResult = {
+    inserted: 0,
+    updated: 0,
+    skipped: 0,
+    pruned: 0,
+    insertedIds: [],
+    receivedAtIso,
+  };
 
   runInTransaction(() => {
     for (const feature of features) {
@@ -177,6 +204,7 @@ export async function importUsgsEarthquakes(
       const existingUpdatedAt = findUpdatedAtUtcById(row.id, db);
       if (existingUpdatedAt === null) {
         result.inserted += 1;
+        result.insertedIds.push(row.id);
       } else if (existingUpdatedAt !== row.updated_at_utc) {
         result.updated += 1;
       } else {
@@ -194,6 +222,17 @@ export async function importUsgsEarthquakes(
   result.pruned = deleteOldEarthquakes(MAX_DAYS, db);
 
   setSettingValue(LAST_SYNC_SETTING_KEY, toIsoUtc(Date.now()), db);
+
+  try {
+    logSyncAttempt({
+      source: "usgs",
+      status: "ok",
+      imported: result.inserted,
+      startedAt: startedAtIso,
+    });
+  } catch {
+    // Sin observabilidad el import sigue siendo válido.
+  }
 
   return result;
 }

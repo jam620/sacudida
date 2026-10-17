@@ -6,10 +6,12 @@
  *   se sirve la última respuesta buena (fail-safe del contrato).
  * - Estáticos (/_next/static, /icons, manifiesto): stale-while-revalidate.
  * - Navegación: red primero; sin red, página offline.
- * Solo mismo origen y solo GET.
+ * - Push: avisos de sismos nuevos (etiquetados como generados después
+ *   de la publicación de la fuente; Sacudida no emite alerta temprana).
+ * Solo mismo origen y solo GET para el fetch handler.
  */
 
-const VERSION = "sacudida-v1";
+const VERSION = "sacudida-v2";
 const STATIC_CACHE = `${VERSION}-static`;
 const API_CACHE = `${VERSION}-api`;
 const PAGES_CACHE = `${VERSION}-pages`;
@@ -150,4 +152,70 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(navigationStrategy(request));
   }
+});
+
+/** Aviso push de un sismo nuevo (el servidor preformatea los textos). */
+self.addEventListener("push", (event) => {
+  if (!event.data) {
+    return;
+  }
+
+  let payload = null;
+  try {
+    payload = event.data.json();
+  } catch {
+    return;
+  }
+  if (!payload || payload.kind !== "earthquake") {
+    return;
+  }
+
+  const bodyParts = [`M ${payload.magnitude.toFixed(1)} — ${payload.place}`];
+  if (payload.distanceLabel) {
+    bodyParts.push(payload.distanceLabel);
+  }
+  bodyParts.push(`${payload.timeLabel} (hora de Panamá)`);
+  bodyParts.push(payload.disclaimer);
+
+  event.waitUntil(
+    self.registration.showNotification(`Sacudida · ${payload.label}`, {
+      body: bodyParts.join("\n"),
+      tag: `sismo-${payload.id}`,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: { url: payload.appUrl, eventUrl: payload.url },
+      silent: false,
+    })
+  );
+});
+
+/** Clic en el aviso: abrir/enfocar la app con el evento preseleccionado. */
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const targetUrl =
+    (event.notification.data && event.notification.data.url) || "/";
+
+  event.waitUntil(
+    (async () => {
+      const clientList = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      for (const client of clientList) {
+        if ("focus" in client) {
+          await client.focus();
+          if ("navigate" in client && client.url !== targetUrl) {
+            try {
+              await client.navigate(targetUrl);
+            } catch {
+              // Si la navegación falla, el foco ya basta.
+            }
+          }
+          return;
+        }
+      }
+      await self.clients.openWindow(targetUrl);
+    })()
+  );
 });

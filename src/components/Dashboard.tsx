@@ -12,11 +12,14 @@ import AftershockChart from "./AftershockChart";
 import AftershockCounter from "./AftershockCounter";
 import AlertBanner from "./AlertBanner";
 import EarthquakeList from "./EarthquakeList";
+import EewDemo from "./EewDemo";
 import Filters from "./Filters";
 import LatestEarthquakeCard from "./LatestEarthquakeCard";
 import MapView from "./MapView";
+import NoticeLabels from "./NoticeLabels";
 import QuickSafetyStrip from "./QuickSafetyStrip";
 import StatsPanel from "./StatsPanel";
+import WatchedZones from "./WatchedZones";
 import { useEarthquakes } from "@/hooks/useEarthquakes";
 import { useSettings } from "@/hooks/useSettings";
 import { useUserLocation } from "@/hooks/useUserLocation";
@@ -37,6 +40,7 @@ import {
   requestNotificationPermission,
 } from "@/lib/notifications";
 import { playAlertSound } from "@/lib/sound";
+import { NOTICE_DISCLAIMER } from "@/lib/noticeLabels";
 import type { Earthquake, EarthquakeFilters } from "@/types/earthquake";
 
 /** Evento más reciente por encima de una magnitud dada. */
@@ -149,6 +153,15 @@ export default function Dashboard() {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Aviso push abierto: preseleccionar el evento (?sismo=<id>).
+  useEffect(() => {
+    if (typeof window === "undefined" || earthquakes === null) return;
+    const target = new URLSearchParams(window.location.search).get("sismo");
+    if (target && earthquakes.some((earthquake) => earthquake.id === target)) {
+      setSelectedId(target);
+    }
+  }, [earthquakes]);
 
   // Si el navegador ya tenía permiso concedido, activar avisos sin
   // notificar por datos históricos ya visibles.
@@ -333,6 +346,10 @@ export default function Dashboard() {
 
       <QuickSafetyStrip />
 
+      <WatchedZones />
+
+      <EewDemo />
+
       <div className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">
         <Filters
           filters={filters}
@@ -506,6 +523,14 @@ export default function Dashboard() {
             : ""}
           .
         </span>
+      </p>
+
+      <NoticeLabels />
+
+      <p className="rounded-xl border border-amber-800/50 bg-amber-950/20 p-3 text-xs leading-relaxed text-amber-200">
+        {NOTICE_DISCLAIMER} Los avisos de Sacudida se generan después de que
+        la fuente publica el evento y pueden tardar minutos; no son alerta
+        temprana. Ante una emergencia real sigue a SINAPROC y llama al 911.
       </p>
     </section>
   );

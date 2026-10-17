@@ -33,7 +33,8 @@ describe("importUsgsEarthquakes", () => {
 
     const result = await importUsgsEarthquakes();
 
-    expect(result).toEqual({ inserted: 2, updated: 0, skipped: 0, pruned: 0 });
+    expect(result).toMatchObject({ inserted: 2, updated: 0, skipped: 0, pruned: 0 });
+    expect(result.insertedIds).toEqual(["us1000uno", "us1000dos"]);
 
     const one = findEarthquakeById("us1000uno");
     expect(one?.magnitude).toBe(3.4);
@@ -56,7 +57,8 @@ describe("importUsgsEarthquakes", () => {
     await importUsgsEarthquakes();
     const second = await importUsgsEarthquakes();
 
-    expect(second).toEqual({ inserted: 0, updated: 0, skipped: 1, pruned: 0 });
+    expect(second).toMatchObject({ inserted: 0, updated: 0, skipped: 1, pruned: 0 });
+    expect(second.insertedIds).toEqual([]);
   });
 
   it("actualiza eventos cuyo updated_at_utc cambió", async () => {
@@ -81,7 +83,7 @@ describe("importUsgsEarthquakes", () => {
     );
     const second = await importUsgsEarthquakes();
 
-    expect(second).toEqual({ inserted: 0, updated: 1, skipped: 0, pruned: 0 });
+    expect(second).toMatchObject({ inserted: 0, updated: 1, skipped: 0, pruned: 0 });
     expect(findEarthquakeById("us3000")?.magnitude).toBe(4.6);
   });
 

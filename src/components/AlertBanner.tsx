@@ -13,6 +13,7 @@ import {
   formatPanamaDateTime,
   formatRelativeTime,
 } from "@/lib/format";
+import { NOTICE_DISCLAIMER, NOTICE_LABELS } from "@/lib/noticeLabels";
 import type { Earthquake } from "@/types/earthquake";
 
 type AlertBannerProps = {
@@ -48,6 +49,9 @@ export default function AlertBanner({ earthquake }: AlertBannerProps) {
             }`}
           >
             {highImpact ? "Alto impacto potencial" : "Sismo relevante"}
+          </span>
+          <span className="mr-2 inline-block rounded-md border border-slate-500/60 px-2 py-0.5 text-xs font-medium text-slate-300">
+            {NOTICE_LABELS["post-event"]}
           </span>
           M {formatMagnitude(earthquake.magnitude)} — {earthquake.place} —{" "}
           {formatRelativeTime(earthquake.time)} (
@@ -89,8 +93,8 @@ export default function AlertBanner({ earthquake }: AlertBannerProps) {
       ) : null}
 
       <p className="mt-3 text-xs text-slate-300">
-        Información con fines informativos. Ver detalle y posibles
-        revisiones en{" "}
+        {NOTICE_DISCLAIMER} Este aviso se genera después de que la fuente
+        publica el evento. Ver detalle y posibles revisiones en{" "}
         <a
           href={earthquake.url}
           target="_blank"

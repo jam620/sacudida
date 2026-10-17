@@ -20,6 +20,25 @@ balance oficial y noticias de la emergencia.
 - **Avisos con sonido** (🔊 sin permisos del SO, suenan con la pestaña
   abierta): tono doble para sismos nuevos sobre el umbral y tono urgente
   para M ≥ 5.5; vibración opcional y notificación del navegador.
+- **Avisos push aunque la app esté cerrada** (Web Push + VAPID): cada
+  navegador se suscribe y recibe magnitud, lugar, hora de Panamá,
+  distancia a la zona vigilada y enlace al detalle. Suscripciones
+  expiradas se limpian solas (404/410). Etiquetados siempre como
+  "Aviso posterior a la publicación del sismo".
+- **Zonas vigiladas**: puntos propios (hogar, trabajo…) con radio y
+  magnitud mínima; el push solo se envía si el sismo entra en una zona
+  activa (haversine sobre `src/lib/geo.ts`).
+- **Simulacro de alerta temprana (modo demostración)**: muestra cómo
+  se vería un aviso EEW real —cuenta regresiva, intensidad esperada,
+  "Agáchate, cúbrete y sujétate"— con la interfaz
+  `EarthquakeEarlyWarningProvider` lista para una autoridad real.
+  Sacudida NO tiene alerta temprana real ni la promete.
+- **Adaptador IGC-UP desacoplado** (`src/server/etl/igcImporter.ts`):
+  la red local no publica API/feed estable (validado oct-2026); el
+  importador queda listo tras `IGC_UP_FEED_URL`, normaliza al modelo
+  interno y deduplica contra USGS (±60 s, ≤30 km, ±0.5 M).
+- **Observabilidad**: `/api/health` reporta DB, estado/último error por
+  fuente y último push con `latencyMs = notifiedAt − sourcePublishedAt`.
 - **Mapa** oscuro con marcadores por color/tamaño según magnitud.
 - **Lista** con hora de Panamá (día/mes/año) y referencia UTC.
 - **Último sismo** destacado con **lectura en voz alta** (fecha en
@@ -43,8 +62,8 @@ balance oficial y noticias de la emergencia.
 ## Stack
 
 Next.js 15 (App Router) · TypeScript estricto · Tailwind CSS 4 · SWR ·
-Leaflet + react-leaflet · SQLite (better-sqlite3) · Zod · Vitest (123
-pruebas).
+Leaflet + react-leaflet · SQLite (better-sqlite3) · Zod · web-push ·
+Vitest (170 pruebas).
 
 ## Puesta en marcha local
 
@@ -70,6 +89,16 @@ npm run dev         # http://localhost:3000
 | `npm run test` (`test:watch`, `test:coverage`) | Vitest (123 pruebas) |
 | `npm run db:init` / `npm run sync` | Base y sincronización manual |
 | `node scripts/generate-icons.mjs` | Regenera iconos PWA |
+| `node scripts/generate-vapid-keys.mjs` | Genera claves VAPID en `.env.local` |
+
+### Avisos push en local
+
+```bash
+node scripts/generate-vapid-keys.mjs   # escribe NEXT_PUBLIC_VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY
+npm run build && npm run start         # el SW solo se registra en producción local
+# En la app: sección "Zonas vigiladas" → "Activar avisos push (app cerrada)"
+curl -X POST http://localhost:3000/api/push/dispatch   # dispara sync + envío (dev sin token)
+```
 
 ## Despliegue en Vercel
 
@@ -79,6 +108,20 @@ npm run dev         # http://localhost:3000
    `better-sqlite3` funciona en runtime Node.js (no Edge).
 3. Variable opcional: `DISABLE_AUTO_SYNC=1` para poblar solo con
    `POST /api/earthquakes/sync`.
+4. **Avisos push**: añade en Settings → Environment Variables
+   `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT`
+   (los genera `node scripts/generate-vapid-keys.mjs`) y opcionalmente
+   `CRON_SECRET` para el despacho programado.
+5. **Despacho con la app cerrada**: `vercel.json` incluye un cron diario
+   a `/api/push/dispatch` (límite del plan Hobby). El push casi inmediato
+   llega por el sondeo en vivo de cualquier usuario con la app abierta;
+   para despachos cada pocos minutos usa un scheduler externo
+   (cron-job.org, GitHub Actions) llamando
+   `POST /api/push/dispatch?token=$PUSH_DISPATCH_TOKEN`.
+6. **Limitación serverless documentada**: suscripciones y zonas viven en
+   el SQLite efímero de cada instancia; la app re-suscribe al abrirse y
+   el despacho viaja con el sondeo, pero un almacén durable
+   (Turso/Neon/Upstash) queda como mejora P2.
 
 ### Instalación en el teléfono
 
@@ -94,6 +137,11 @@ npm run dev         # http://localhost:3000
 | GET | `/api/earthquakes/stats` | Réplicas de la secuencia + lastSyncAt |
 | GET | `/api/earthquakes/[id]` | Detalle por ID de USGS |
 | POST | `/api/earthquakes/sync` | Sincroniza desde USGS |
+| POST | `/api/push/subscribe` | Registra suscripción Web Push |
+| POST | `/api/push/unsubscribe` | Elimina suscripción (idempotente) |
+| PUT | `/api/push/preferences` | Umbral de magnitud de la suscripción |
+| GET/POST | `/api/push/dispatch` | Sync + envío de push (token protegido) |
+| GET/POST | `/api/zones` · PATCH/DELETE `/api/zones/[id]` | Zonas vigiladas |
 | GET | `/api/news` | Noticias RSS (caché 5 min) |
 | GET | `/api/health` | Estado de la app y la base |
 | GET / PUT | `/api/settings` | Preferencias (filtros + umbral de avisos) |
