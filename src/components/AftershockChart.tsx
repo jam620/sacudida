@@ -49,6 +49,16 @@ export default function AftershockChart({
   }
 
   const points = buildAftershockPoints(earthquakes, mainshock.time);
+  // El principal puede estar fuera de la ventana de días que filtra la
+  // lista; es la referencia de las 0 h, así que siempre se dibuja.
+  if (!points.some((point) => point.id === mainshock.id)) {
+    points.unshift({
+      id: mainshock.id,
+      hours: 0,
+      magnitude: mainshock.magnitude,
+      isBig: mainshock.magnitude >= BIG_POINT_MAGNITUDE,
+    });
+  }
   if (points.length < 2) {
     return null;
   }
@@ -57,6 +67,9 @@ export default function AftershockChart({
   const { min: magMin, max: magMax } = magnitudeDomain(points);
   const ticks = hourTicks(maxHours);
   const byId = new Map(earthquakes.map((eq) => [eq.id, eq]));
+  if (!byId.has(mainshock.id)) {
+    byId.set(mainshock.id, mainshock);
+  }
 
   const xOf = (hours: number): number =>
     MARGIN.left + (hours / maxHours) * INNER_WIDTH;
@@ -101,7 +114,7 @@ export default function AftershockChart({
               x={MARGIN.left - 8}
               y={yOf(level) + 4}
               textAnchor="end"
-              className="fill-slate-400 text-[11px]"
+              className="fill-slate-400 text-[13px]"
             >
               M {level}
             </text>
@@ -123,7 +136,7 @@ export default function AftershockChart({
               x={xOf(hour)}
               y={HEIGHT - 10}
               textAnchor="middle"
-              className="fill-slate-400 text-[11px]"
+              className="fill-slate-400 text-[13px]"
             >
               {hour === 0 ? "0 h" : `${hour} h`}
             </text>
